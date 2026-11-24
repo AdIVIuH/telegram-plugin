@@ -28,17 +28,19 @@ class MediaGateway(FakeGateway):
         self.accesses += 1
         super()._check()
 
-    async def send_media(self, ref, files, *, media_type, caption='', reply_to=None):
+    async def send_media(self, ref, stream, *, media_type, caption='', reply_to=None):
         self._check()
-        if isinstance(files, list):
-            self.albums.append((ref.value, [s.name for s in files],
-                                [s.read() for s in files], media_type, caption, reply_to))
-            return {'message_ids': list(range(1000, 1000 + len(files))),
-                    'grouped_id': 4242, 'chat_id': -1001, 'chat_title': 'Alpha',
-                    'reply_to': reply_to, 'media_type': media_type}
-        self.uploads.append((ref.value, files.name, files.read(), media_type, caption, reply_to))
+        self.uploads.append((ref.value, stream.name, stream.read(), media_type, caption, reply_to))
         return {'message_id': 999, 'chat_id': -1001, 'chat_title': 'Alpha',
                 'reply_to': reply_to, 'media_type': media_type}
+
+    async def send_album(self, ref, files, *, caption='', reply_to=None):
+        self._check()
+        self.albums.append((ref.value, [s.name for s in files],
+                            [s.read() for s in files], caption, reply_to))
+        return {'message_ids': list(range(1000, 1000 + len(files))),
+                'grouped_id': 4242, 'chat_id': -1001, 'chat_title': 'Alpha',
+                'reply_to': reply_to, 'media_type': 'photo'}
 
 
 def invoke(capsys, tmp_path, args, *, enabled=True, gateway=None):
@@ -150,18 +152,21 @@ def test_invalid_combinations(capsys, tmp_path, args):
     assert gateway.close_calls == 0
 
 
-@pytest.mark.parametrize('args', [
-    ['--text', 'hi', '--caption', 'invalid'],
-    ['--text-file', 'missing.txt', '--caption-file', 'missing.txt'],
-    ['--photo', 'file.pdf'],
+@pytest.mark.parametrize('args, reason', [
+    (['--text', 'hi', '--caption', 'invalid'], 'a caption needs --file, --photo or --document'),
+    (['--text-file', 'missing.txt', '--caption-file', 'missing.txt'],
+     'a caption needs --file, --photo or --document'),
+    (['--photo', 'file.pdf'], 'file 1 is not JPEG or PNG content'),
 ])
-def test_semantic_argument_errors(capsys, tmp_path, args):
+def test_semantic_argument_errors(capsys, tmp_path, args, reason):
     root = tmp_path / 'output'
     root.mkdir()
     (root / 'file.pdf').write_bytes(b'PDF')
     code, captured, gateway = invoke(capsys, tmp_path, ['@alpha', *args])
     assert code == 1
-    assert json.loads(captured.out)['error']['code'] == 'invalid_send_arguments'
+    error = json.loads(captured.out)['error']
+    assert error['code'] == 'invalid_send_arguments'
+    assert reason in error['message']
     assert gateway.uploads == []
 
 
@@ -366,7 +371,7 @@ def test_repeated_file_sends_one_captioned_photo_album(capsys, tmp_path, count):
     assert gateway.uploads == []
     assert gateway.albums == [(
         'alpha', names, [PNG + bytes([index]) for index in range(count)],
-        'photo', 'one album caption', 7,
+        'one album caption', 7,
     )]
     assert gateway.close_calls == 1
 
@@ -385,7 +390,7 @@ def test_a_caption_file_titles_a_photo_album(capsys, tmp_path):
     assert json.loads(captured.out)['grouped_id'] == 4242
     assert gateway.albums == [(
         'alpha', ['a.png', 'b.png'], [PNG, PNG],
-        'photo', 'album **caption**\nsecond line', None,
+        'album **caption**\nsecond line', None,
     )]
     assert gateway.uploads == []
 
@@ -401,8 +406,8 @@ def test_send_help_documents_the_photo_album_contract(capsys, tmp_path):
 
 
 async def test_application_send_media_keeps_the_path_keyword(tmp_path):
-    """`path=` is the published keyword — a str for one file, a list for an
-    album — so callers written against the old name must keep working."""
+    """`path=` is the published keyword — a str or Path for one file, a list
+    for an album — so callers written against the old name must keep working."""
     from telegram_plugin.application import TelegramApplication
     from telegram_plugin.errors import InvalidSendArguments
 
@@ -420,15 +425,21 @@ async def test_application_send_media_keeps_the_path_keyword(tmp_path):
 
     single = await application.send_media(
         chat='@alpha', path='a.png', media_type='auto')
+    path_object = await application.send_media(
+        chat='@alpha', path=root / 'a.png', media_type='auto')
     album = await application.send_media(
         chat='@alpha', path=['a.png', 'b.png'], media_type='auto')
 
     assert single['message_id'] == 999
+    assert path_object['message_id'] == 999
     assert album['message_ids'] == [1000, 1001]
     assert album['grouped_id'] == 4242
-    assert gateway.uploads == [('alpha', 'a.png', PNG, 'photo', '', None)]
+    assert gateway.uploads == [
+        ('alpha', 'a.png', PNG, 'photo', '', None),
+        ('alpha', 'a.png', PNG, 'photo', '', None),
+    ]
     assert gateway.albums == [(
-        'alpha', ['a.png', 'b.png'], [PNG, PNG + b'B'], 'photo', '', None)]
+        'alpha', ['a.png', 'b.png'], [PNG, PNG + b'B'], '', None)]
 
     with pytest.raises(InvalidSendArguments):
         await application.send_media(chat='@alpha', path=[], media_type='auto')
@@ -477,7 +488,11 @@ def test_an_album_member_that_is_not_a_photo_is_rejected(capsys, tmp_path):
     code, captured, gateway = invoke(capsys, tmp_path,
         ['@alpha', '--file', 'ok.png', '--file', 'notes.pdf'])
     assert code == 1
-    assert json.loads(captured.out)['error']['code'] == 'invalid_send_arguments'
+    error = json.loads(captured.out)['error']
+    assert error['code'] == 'invalid_send_arguments'
+    # The reason names the member by position — never by path.
+    assert 'file 2' in error['message']
+    assert 'notes.pdf' not in error['message']
     assert gateway.uploads == []
     assert gateway.albums == []
     assert gateway.accesses == 0
@@ -493,7 +508,10 @@ def test_more_than_ten_album_files_is_rejected_not_split(capsys, tmp_path):
         args += ['--file', name]
     code, captured, gateway = invoke(capsys, tmp_path, args)
     assert code == 1
-    assert json.loads(captured.out)['error']['code'] == 'invalid_send_arguments'
+    error = json.loads(captured.out)['error']
+    assert error['code'] == 'invalid_send_arguments'
+    assert '11 files' in error['message']
+    assert 'at most 10' in error['message']
     assert gateway.uploads == []
     assert gateway.albums == []
     assert gateway.accesses == 0
@@ -501,7 +519,7 @@ def test_more_than_ten_album_files_is_rejected_not_split(capsys, tmp_path):
 
 def test_a_failed_album_upload_is_not_retried(capsys, tmp_path):
     class FailingGateway(MediaGateway):
-        async def send_media(self, *args, **kwargs):
+        async def send_album(self, *args, **kwargs):
             self._check()
             raise OSError('transport failed')
     root = tmp_path / 'output'
@@ -548,9 +566,9 @@ async def test_telethon_album_is_one_send_file_call_with_grouped_ids(tmp_path):
     with ExitStack() as stack:
         streams = [stack.enter_context(open_confined_file(name, root=tmp_path))
                    for name in uploads]
-        result = await gateway.send_media(
+        result = await gateway.send_album(
             parse_chat_ref('@alpha'), streams,
-            media_type='photo', caption='one caption', reply_to=7)
+            caption='one caption', reply_to=7)
     client.send_file.assert_awaited_once_with(
         entity, streams, caption='one caption', reply_to=7,
         force_document=False, parse_mode=None)
@@ -597,9 +615,9 @@ async def _send_two_file_album(tmp_path, sent):
         streams = [stack.enter_context(open_confined_file(name, root=tmp_path))
                    for name in ('a.png', 'b.png')]
         try:
-            result = await gateway.send_media(
+            result = await gateway.send_album(
                 parse_chat_ref('@alpha'), streams,
-                media_type='photo', caption='', reply_to=None)
+                caption='', reply_to=None)
         except Exception as exc:  # noqa: BLE001 - the test asserts on the type
             return exc, client
     return result, client
@@ -616,6 +634,7 @@ async def _send_two_file_album(tmp_path, sent):
     None,                                                           # malformed response
     [],                                                             # empty response
     [_album_message(1, 7, photo=False), _album_message(2, 7)],      # non-photo member
+    [_album_message(7, 7), _album_message(7, 7)],                   # duplicate ids
 ])
 async def test_telethon_album_unconfirmed_shapes_are_never_retried(tmp_path, sent):
     """A partial, grouped-wrong or non-photo album answer means delivery is
@@ -640,7 +659,7 @@ async def test_telethon_album_rejects_an_unconfirmed_response(tmp_path):
 
 def test_an_unconfirmed_album_reports_non_retryable(capsys, tmp_path):
     class UnconfirmedGateway(MediaGateway):
-        async def send_media(self, *args, **kwargs):
+        async def send_album(self, *args, **kwargs):
             self._check()
             raise RuntimeError('Telegram did not confirm the photo album')
 

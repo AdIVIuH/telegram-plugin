@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from telegram_plugin.install import login_command
 from telegram_plugin.privacy import redact_text
 
-LOGIN_HINT = "Session is not authorised — run bin/telegram-login --browser, then retry."
+LOGIN_HINT = f"Session is not authorised — run {login_command()} --browser, then retry."
 
 
 class TelegramPluginError(Exception):
@@ -151,13 +152,8 @@ class UnsafeInputPath(TelegramPluginError):
 class InvalidSendArguments(TelegramPluginError):
     code = "invalid_send_arguments"
 
-    def __init__(self) -> None:
-        super().__init__(
-            "Invalid send arguments. --file may be repeated for one photo album of "
-            "2 to 10 JPEG/PNG files — Telegram caps an album at 10, and a larger set "
-            "is refused rather than split into several albums. Captions require "
-            "--file, --photo or --document; photos must have JPEG or PNG content."
-        )
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Invalid send arguments: {reason}.")
 
 
 def describe(exc: BaseException) -> str:

@@ -6,11 +6,11 @@ import argparse
 import asyncio
 import os
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from telegram_plugin.config import Config, load_config_from_environment
 from telegram_plugin.errors import InvalidSendArguments, TelegramPluginError, describe
+from telegram_plugin.install import CHECKOUT_ROOT, cli_prog, tighten_umask
 from telegram_plugin.matching import normalize_dialog_text
 from telegram_plugin.paths import read_confined_text
 from telegram_plugin.privacy import private_json, private_output
@@ -51,7 +51,7 @@ def _discovery_query(raw: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="telegram", description="Telegram access for local agents")
+    parser = argparse.ArgumentParser(prog=cli_prog(), description="Telegram access for local agents")
     parser.add_argument("--version", action="version", version=f"%(prog)s {_plugin_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -156,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_CHECKOUT_PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
+_CHECKOUT_PYPROJECT = CHECKOUT_ROOT / "pyproject.toml"
 
 
 def _plugin_version() -> str:
@@ -229,7 +229,7 @@ async def dispatch(arguments: argparse.Namespace, application: TelegramApplicati
                            if path is not None), None)
         paths = [media_path] if media_path is not None else list(arguments.file or [])
         if not paths and (arguments.caption is not None or arguments.caption_file is not None):
-            raise InvalidSendArguments()
+            raise InvalidSendArguments("a caption needs --file, --photo or --document")
         if paths:
             caption = arguments.caption or ""
             if arguments.caption_file is not None:
@@ -322,5 +322,13 @@ def main(
     return 0
 
 
+def console_main() -> int:
+    """The installed `telegram-personal` entry: bin/telegram's umask 077,
+    without the shell that normally sets it."""
+    tighten_umask()
+    return main()
+
+
 if __name__ == "__main__":
+    tighten_umask()
     raise SystemExit(main())

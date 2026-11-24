@@ -70,11 +70,19 @@ def test_unknown_chat_ref_reaches_the_model_without_a_class_prefix():
     assert "t.me" in message
 
 
-def test_invalid_send_arguments_explains_the_album_contract():
+def test_invalid_send_arguments_carries_the_reason_it_was_raised_with():
     from telegram_plugin.errors import InvalidSendArguments
 
-    message = describe(InvalidSendArguments())
+    message = describe(InvalidSendArguments("file 2 is not JPEG or PNG content"))
+    assert "file 2 is not JPEG or PNG content" in message
+
+
+def test_invalid_send_arguments_album_reason_names_the_cap_and_the_no_split_rule():
+    from telegram_plugin.errors import InvalidSendArguments
+
+    message = describe(InvalidSendArguments(
+        "11 files given; an album holds at most 10 photos and is never split "
+        "into several sends"))
     assert "album" in message
-    assert "2 to 10" in message
-    assert "JPEG/PNG" in message
-    assert "rather than split" in message
+    assert "at most 10" in message
+    assert "never split" in message
