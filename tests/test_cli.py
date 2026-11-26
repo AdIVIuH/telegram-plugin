@@ -33,6 +33,36 @@ def _invoke(capsys, tmp_path, argv, gateway=None, environment=None):
     return code, captured, selected
 
 
+def test_console_entry_keeps_download_private(tmp_path):
+    script = """
+import os
+import sys
+from pathlib import Path
+
+from telegram_plugin import cli
+from tests.fakes import FakeGateway
+
+state = Path(sys.argv[1])
+output = state / "shared"
+output.mkdir(mode=0o755)
+os.umask(0o022)
+run_cli = cli.main
+cli.main = lambda: run_cli(
+    ["download", "@somechannel", "4"],
+    environment={"HOME": str(state), "TELEGRAM_OUTPUT_ROOT": str(output)},
+    gateway_factory=lambda config: FakeGateway(),
+)
+raise SystemExit(cli.console_main())
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        cwd=REPO,
+        capture_output=True,
+        check=True,
+    )
+    assert (tmp_path / "shared" / "4.pdf").stat().st_mode & 0o777 == 0o600
+
+
 def test_plugin_version_comes_from_the_checkout_pyproject():
     from telegram_plugin.cli import _plugin_version
 

@@ -77,6 +77,17 @@ that does not depend on the checkout's path:
 
 ```bash
 uv tool install 'telegram-plugin @ git+https://github.com/kartollikaa/telegram-plugin.git'
+```
+
+The Git install does not include the publisher's application profile. Create a
+Telegram application at [my.telegram.org](https://my.telegram.org) and save its
+`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in a private `.env` in your state
+directory (default `~/.local/state/telegram-plugin`). Use the format in
+[`.env.example`](.env.example) and restrict the file to your account (`chmod 600`).
+Then approve your Telegram session in the browser and check which account is signed in:
+
+```bash
+telegram-personal-login --browser
 telegram-personal whoami
 ```
 
